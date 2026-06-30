@@ -1,0 +1,13 @@
+# Создай .gitignore (если нет)
+@"
+node_modules/
+dist/
+.DS_Store
+.env
+.env.local
+.env.production
+.env.*.local
+.vscode/
+.idea/
+*.log
+"@ | Out-File -FilePath .gitignore -Encoding UTF8
