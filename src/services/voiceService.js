@@ -1,4 +1,4 @@
-// voiceService.js - Исправленный способ записи голоса
+// voiceService.js - Исправленный способ записи голоса с защитой от Anti-Loop
 
 export class VoiceRecorder {
     constructor() {
@@ -11,12 +11,17 @@ export class VoiceRecorder {
         this.onStart = null;
         this.onEnd = null;
 
-        // Храним ссылку на встроенное распознавание, чтобы контролировать его
+        // Храним ссылку на встроенное распознавание
         this.activeFallbackRecognition = null;
+
+        // Флаг защиты: предотвращает одновременные круговые перезапуски
+        this.isResetting = false;
     }
 
     async start() {
-        // Если уже пишем или работает фолбек — сначала все чистим
+        if (this.isResetting) return false;
+
+        // Если уже пишем — сначала всё аккуратно чистим
         this.stop();
 
         try {
@@ -52,7 +57,7 @@ export class VoiceRecorder {
 
             this.mediaRecorder.onerror = (event) => {
                 console.error('MediaRecorder error:', event);
-                if (this.onError) this.onError('recording_error');
+                this.handleError('recording_error');
             };
 
             this.mediaRecorder.start();
@@ -70,35 +75,31 @@ export class VoiceRecorder {
             return true;
         } catch (error) {
             console.error('Start recording error:', error);
-            if (this.onError) this.onError(error.message);
+            this.handleError(error.message);
             return false;
         }
     }
 
     stop() {
-        // Сбрасываем таймер авто-остановки
         if (this.timeoutId) {
             clearTimeout(this.timeoutId);
             this.timeoutId = null;
         }
 
-        // Останавливаем MediaRecorder
-        if (this.mediaRecorder && this.isRecording) {
+        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             try {
                 this.mediaRecorder.stop();
             } catch (e) {
-                console.warn("MediaRecorder уже был остановлен:", e);
+                console.warn("MediaRecorder не удалось остановить:", e);
             }
         }
         this.isRecording = false;
 
-        // Гасим микрофонные треки
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
         }
 
-        // КРИТИЧНО: Если работал фолбек Web Speech API — принудительно выключаем его
         if (this.activeFallbackRecognition) {
             this.activeFallbackRecognition.onend = null;
             this.activeFallbackRecognition.onerror = null;
@@ -109,8 +110,20 @@ export class VoiceRecorder {
         }
     }
 
+    // Централизованная обработка ошибок с защитой от мгновенного перезапуска
+    handleError(errorMessage) {
+        if (this.isResetting) return;
+        this.isResetting = true;
+
+        if (this.onError) this.onError(errorMessage);
+
+        // Даем интерфейсу и браузеру 1.5 секунды "остыть", прежде чем разрешить новый старт
+        setTimeout(() => {
+            this.isResetting = false;
+        }, 1500);
+    }
+
     async sendToServer(audioBlob) {
-        // Переносим FileReader внутрь Promise, чтобы ловить ошибки асинхронно и правильно!
         try {
             const base64Audio = await new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -122,10 +135,11 @@ export class VoiceRecorder {
                 reader.onerror = () => reject(new Error('Ошибка чтения Blob'));
             });
 
+            // ВАЖНО: Убедись, что на бэкенде (/api/recognize) таймаут ответа укладывается в лимиты Vercel
             const response = await fetch('/api/recognize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ audio: base64Audio, language: 'ru-RU' })
+                body: JSON.stringify({ audio: base64Audio, language: 'uz-UZ' }) // Изменено на uz-UZ
             });
 
             if (!response.ok) {
@@ -137,28 +151,26 @@ export class VoiceRecorder {
                 this.onResult(data.text);
             }
         } catch (error) {
-            console.error('Send to server error (переключаемся на фолбек):', error);
-            if (this.onError) this.onError('server_error');
+            console.error('Send to server error (переключаемся на фолбек встроенного распознавания):', error);
 
-            // Запускаем фолбек, только если пользователь не нажал Стоп вручную
+            // Запускаем фолбек, но НЕ триггерим внешнюю ошибку сразу, чтобы интерфейс не ушел в авто-перезапуск
             this.fallbackToWebSpeech();
         }
     }
 
     fallbackToWebSpeech() {
-        // Если уже запущено встроенное распознавание — не плодим копии
         if (this.activeFallbackRecognition) return;
 
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
-            if (this.onError) this.onError('no_speech_recognition');
+            this.handleError('no_speech_recognition');
             return;
         }
 
         const r = new SR();
-        this.activeFallbackRecognition = r; // Сохраняем ссылку!
+        this.activeFallbackRecognition = r;
 
-        r.lang = 'ru-RU';
+        r.lang = 'uz-UZ'; // Изменено на uz-UZ для соответствия приложению
         r.continuous = false;
         r.interimResults = false;
 
@@ -168,12 +180,11 @@ export class VoiceRecorder {
         };
 
         r.onerror = (ev) => {
-            // Игнорируем штатные прерывания, чтобы не спамить в onError
             if (ev.error === 'aborted' || ev.error === 'no-speech') {
                 console.warn('Штатный сброс фолбека:', ev.error);
                 return;
             }
-            if (this.onError) this.onError(ev.error);
+            this.handleError(ev.error);
         };
 
         r.onend = () => {
