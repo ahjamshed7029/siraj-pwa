@@ -9,31 +9,15 @@ export default function App() {
     const [currentSurah, setCurrentSurah] = useState(null);
     const [isListening, setIsListening] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
-    const [lightColor, setLightColor] = useState('#e0a92a'); // Цвет свечения
 
     const recognitionRef = useRef(null);
-    const restartTimeoutRef = useRef(null);
-    const isRestartingRef = useRef(false);
-    const lastSpeechTimeRef = useRef(0);
+    const isManualStopRef = useRef(false);
 
-    // Сброс защиты при монтировании
-    useEffect(() => {
-        // Чистим все таймеры при размонтировании
-        return () => {
-            if (restartTimeoutRef.current) {
-                clearTimeout(restartTimeoutRef.current);
-            }
-            if (recognitionRef.current) {
-                recognitionRef.current.abort();
-            }
-        };
-    }, []);
-
-    // Инициализация микрофона
+    // Инициализация Speech Recognition
     useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
-            console.error("Speech Recognition не поддерживается");
+            alert('Ваш браузер не поддерживает распознавание речи');
             return;
         }
 
@@ -44,80 +28,75 @@ export default function App() {
         rec.continuous = false;
 
         rec.onstart = () => {
-            console.log('🎤 Микрофон включен');
+            console.log('🎤 Микрофон ВКЛЮЧЕН');
             setIsListening(true);
-            setLightColor('#4CAF50'); // Зеленый - слушаем
         };
 
         rec.onend = () => {
             console.log('🎤 Микрофон выключен');
             setIsListening(false);
 
-            // Автоматический перезапуск только если мы на шаге ask_name
-            // и не было речи последние 2 секунды
-            if (step === 'ask_name' && !isRestartingRef.current) {
-                const timeSinceLastSpeech = Date.now() - lastSpeechTimeRef.current;
-                if (timeSinceLastSpeech > 2000) {
-                    isRestartingRef.current = true;
-                    restartTimeoutRef.current = setTimeout(() => {
-                        tryRestartRecognition();
-                        isRestartingRef.current = false;
-                    }, 800);
-                }
+            // Автоперезапуск только если не ручная остановка и мы ждем имя
+            if (!isManualStopRef.current && step === 'ask_name') {
+                console.log('🔄 Автоперезапуск через 500мс...');
+                setTimeout(() => {
+                    try {
+                        if (recognitionRef.current) {
+                            recognitionRef.current.start();
+                            console.log('✅ Автоперезапуск успешен');
+                        }
+                    } catch (e) {
+                        console.log('❌ Ошибка автоперезапуска:', e.message);
+                    }
+                }, 500);
             }
         };
 
         rec.onerror = (e) => {
-            console.error('❌ Ошибка микрофона:', e.error);
+            console.error('❌ Ошибка:', e.error);
             setIsListening(false);
-            setLightColor('#f44336'); // Красный при ошибке
 
-            // Игнорируем aborted при ручной остановке
-            if (e.error === 'aborted') return;
-
-            // Для no-speech просто пытаемся перезапустить с задержкой
-            if (e.error === 'no-speech' && step === 'ask_name' && !isRestartingRef.current) {
-                isRestartingRef.current = true;
-                restartTimeoutRef.current = setTimeout(() => {
-                    tryRestartRecognition();
-                    isRestartingRef.current = false;
-                }, 1000);
+            if (e.error === 'no-speech') {
+                console.log('🔇 Тишина, перезапускаем...');
+                setTimeout(() => {
+                    try {
+                        recognitionRef.current?.start();
+                    } catch (err) {
+                        console.log('Не удалось перезапустить после ошибки');
+                    }
+                }, 300);
             }
         };
 
         rec.onresult = (event) => {
-            lastSpeechTimeRef.current = Date.now();
-            const resultText = event.results[0][0].transcript.replace(/\.$/, '').trim();
-            setLightColor('#FFD700'); // Золотой - обрабатываем речь
+            const resultText = event.results[0][0].transcript.trim();
             console.log('🗣️ Распознано:', resultText);
-            processVoiceInput(resultText);
+
+            if (resultText) {
+                processVoiceInput(resultText);
+            }
         };
 
         recognitionRef.current = rec;
+
+        return () => {
+            isManualStopRef.current = true;
+            if (recognitionRef.current) {
+                recognitionRef.current.abort();
+            }
+        };
     }, [step]);
 
-    const tryRestartRecognition = () => {
-        if (!recognitionRef.current || step !== 'ask_name') return;
-
-        try {
-            recognitionRef.current.start();
-            console.log('🔄 Перезапуск микрофона');
-        } catch (e) {
-            console.log('⚠️ Не удалось перезапустить:', e.message);
-            // Если не удалось, пробуем еще раз через секунду
-            setTimeout(() => {
-                try {
-                    recognitionRef.current?.start();
-                } catch (e2) {
-                    console.log('❌ Повторный перезапуск не удался');
-                }
-            }, 1000);
-        }
-    };
-
     const speakAndListen = (text) => {
-        // Отменяем предыдущую речь
+        // Останавливаем текущую речь и микрофон
         window.speechSynthesis.cancel();
+
+        isManualStopRef.current = true;
+        if (recognitionRef.current) {
+            try {
+                recognitionRef.current.abort();
+            } catch (e) { }
+        }
 
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'ru-RU';
@@ -125,31 +104,40 @@ export default function App() {
         utterance.pitch = 1.0;
 
         utterance.onstart = () => {
+            console.log('🔊 Учитель говорит...');
             setIsSpeaking(true);
-            setLightColor('#9C27B0'); // Фиолетовый - учитель говорит
-            // Останавливаем микрофон пока говорит учитель
-            if (recognitionRef.current) {
-                try {
-                    recognitionRef.current.abort();
-                } catch (e) { }
-            }
         };
 
         utterance.onend = () => {
+            console.log('🔇 Учитель закончил');
             setIsSpeaking(false);
-            console.log('🔇 Учитель закончил говорить');
+            isManualStopRef.current = false;
 
-            // Запускаем микрофон с задержкой после речи
+            // Запускаем микрофон с задержкой
             setTimeout(() => {
                 if (step === 'ask_name' && recognitionRef.current) {
                     try {
                         recognitionRef.current.start();
-                        console.log('🎤 Микрофон включен после речи учителя');
+                        console.log('🎤 Микрофон запущен после речи');
                     } catch (e) {
-                        console.log('⚠️ Ошибка запуска после речи:', e.message);
+                        console.error('❌ Ошибка запуска:', e.message);
+                        // Пробуем еще раз
+                        setTimeout(() => {
+                            try {
+                                recognitionRef.current?.start();
+                            } catch (e2) {
+                                console.error('❌ Повторная ошибка');
+                            }
+                        }, 1000);
                     }
                 }
-            }, 500);
+            }, 300);
+        };
+
+        utterance.onerror = (e) => {
+            console.error('Ошибка синтеза речи:', e);
+            setIsSpeaking(false);
+            isManualStopRef.current = false;
         };
 
         window.speechSynthesis.speak(utterance);
@@ -157,36 +145,34 @@ export default function App() {
 
     const handleStartClick = () => {
         setStep('ask_name');
-        const text = "Скажи, пожалуйста, как тебя зовут?";
-        speakAndListen(text);
+        speakAndListen("Ассаляму алейкум! Скажи, пожалуйста, как тебя зовут?");
     };
 
     const autoSelectTeacher = (name) => {
-        const lowerName = name.toLowerCase();
+        const lowerName = name.toLowerCase().trim();
 
-        const femaleIndicators = ['а', 'я', 'ия', 'ья'];
-        const endsWithFemale = femaleIndicators.some(end => lowerName.endsWith(end));
+        // Женские имена и окончания
+        const femalePatterns = ['а', 'я', 'ия', 'ья'];
+        const isFemaleEnding = femalePatterns.some(end => lowerName.endsWith(end));
 
-        const childIndicators = ['чик', 'нек', 'еньк', 'ушк', 'ик', 'ок'];
-        const isChildish = childIndicators.some(ind => lowerName.includes(ind));
+        const femaleNames = ['марьям', 'аиша', 'фатима', 'зейнаб', 'хадиджа', 'амина',
+            'сара', 'мария', 'анна', 'софия', 'алиса', 'милана', 'алина',
+            'мадина', 'айша', 'хава', 'асия'];
+        const isFemaleName = femaleNames.some(n => lowerName.includes(n));
 
-        const femaleNames = ['марьям', 'аиша', 'фатима', 'зейнаб', 'хадиджа', 'амина', 'сара', 'мария', 'анна', 'софия', 'алиса', 'милана'];
-        const isFemaleName = femaleNames.some(name => lowerName.includes(name));
+        const childPatterns = ['чка', 'нька', 'ушка', 'ик', 'ек'];
+        const isChildish = childPatterns.some(p => lowerName.includes(p));
 
-        if (endsWithFemale || isChildish || isFemaleName) {
-            return 'ayisha';
-        }
-        return 'hasan';
+        return (isFemaleEnding || isFemaleName || isChildish) ? 'ayisha' : 'hasan';
     };
 
     const processVoiceInput = (voiceText) => {
         if (!voiceText || step !== 'ask_name') return;
 
         // Останавливаем микрофон
+        isManualStopRef.current = true;
         if (recognitionRef.current) {
-            try {
-                recognitionRef.current.abort();
-            } catch (e) { }
+            recognitionRef.current.abort();
         }
 
         setUserName(voiceText);
@@ -194,66 +180,50 @@ export default function App() {
         setTeacher(assignedTeacher);
         setStep('learning');
 
-        let welcomeText = assignedTeacher === 'ayisha'
-            ? `Здравствуй, ${voiceText}! Меня зовут Аиша. Я помогу тебе в изучении Корана. Выбирай суру, и мы начнем.`
-            : `Приветствую, ${voiceText}. Я твой наставник Хасан. Вместе мы изучим Коран. Выбирай суру для начала.`;
+        const welcomeText = assignedTeacher === 'ayisha'
+            ? `Здравствуй, ${voiceText}! Я Аиша. Давай изучать Коран вместе. Выбери суру.`
+            : `Приветствую, ${voiceText}! Я Хасан. Начнем изучение. Выбери суру.`;
 
-        // Просто озвучиваем, микрофон больше не включаем
-        window.speechSynthesis.cancel();
-        const utt = new SpeechSynthesisUtterance(welcomeText);
-        utt.lang = 'ru-RU';
-        utt.rate = 0.9;
-        utt.onstart = () => {
-            setIsSpeaking(true);
-            setLightColor('#9C27B0');
-        };
-        utt.onend = () => {
-            setIsSpeaking(false);
-            setLightColor('#e0a92a');
-        };
-        window.speechSynthesis.speak(utt);
+        const utterance = new SpeechSynthesisUtterance(welcomeText);
+        utterance.lang = 'ru-RU';
+        utterance.rate = 0.9;
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        window.speechSynthesis.speak(utterance);
     };
 
     const loadSurah = async (surahNum) => {
         try {
             const res = await fetch(`https://api.alquran.cloud/v1/surah/${surahNum}/ar.alafasy`);
-            const result = await res.json();
+            const data = await res.json();
 
-            if (result.code === 200 && result.data?.verses) {
-                setVerses(result.data.verses);
-                setCurrentIndex(0);
+            if (data.data?.verses) {
+                setVerses(data.data.verses);
                 setCurrentSurah(surahNum);
 
                 const text = teacher === 'hasan'
-                    ? "Слушай внимательно аяты и повторяй. Я исправлю ошибки."
-                    : "Слушай эти прекрасные аяты. Я помогу тебе с произношением.";
+                    ? "Слушай аяты и повторяй."
+                    : "Слушай внимательно, я помогу.";
 
-                const utt = new SpeechSynthesisUtterance(text);
-                utt.lang = 'ru-RU';
-                utt.onstart = () => {
-                    setIsSpeaking(true);
-                    setLightColor('#9C27B0');
-                };
-                utt.onend = () => {
-                    setIsSpeaking(false);
-                    setLightColor('#e0a92a');
-                };
-                window.speechSynthesis.speak(utt);
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'ru-RU';
+                utterance.onstart = () => setIsSpeaking(true);
+                utterance.onend = () => setIsSpeaking(false);
+                window.speechSynthesis.speak(utterance);
             }
         } catch (e) {
-            console.error('Ошибка загрузки суры:', e);
+            console.error('Ошибка загрузки:', e);
         }
     };
 
-    // Определяем финальный цвет свечения
     const getGlowColor = () => {
-        if (isSpeaking) return '#9C27B0'; // Фиолетовый - говорит учитель
-        if (isListening) return '#4CAF50'; // Зеленый - слушаем ученика
-        if (step === 'greeting') return '#e0a92a'; // Золотой - ожидание
-        return '#2196F3'; // Синий - режим обучения
+        if (isSpeaking) return '#9C27B0';
+        if (isListening) return '#4CAF50';
+        if (step === 'greeting') return '#FFD700';
+        return '#2196F3';
     };
 
-    const finalGlowColor = getGlowColor();
+    const glowColor = getGlowColor();
 
     return (
         <div style={{
@@ -268,129 +238,92 @@ export default function App() {
             overflow: 'hidden'
         }}>
 
-            {/* Фоновое свечение */}
             <div style={{
                 position: 'absolute',
-                width: '400px',
-                height: '400px',
+                width: '300px',
+                height: '300px',
                 borderRadius: '50%',
-                background: `radial-gradient(circle, ${finalGlowColor}40 0%, transparent 70%)`,
-                filter: 'blur(60px)',
-                transition: 'all 1s ease',
-                pointerEvents: 'none'
+                background: `radial-gradient(circle, ${glowColor}40 0%, transparent 70%)`,
+                filter: 'blur(50px)',
+                transition: 'all 1s ease'
             }} />
 
-            {/* Центральный индикатор */}
             <div style={{
-                width: '200px',
-                height: '200px',
+                width: '180px',
+                height: '180px',
                 borderRadius: '50%',
-                background: `radial-gradient(circle, ${finalGlowColor} 0%, ${finalGlowColor}80 40%, ${finalGlowColor}20 100%)`,
+                background: `radial-gradient(circle, ${glowColor} 0%, ${glowColor}80 40%, ${glowColor}20 100%)`,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                boxShadow: `0 0 60px ${finalGlowColor}80, 0 0 120px ${finalGlowColor}40`,
+                boxShadow: `0 0 50px ${glowColor}80, 0 0 100px ${glowColor}40`,
                 transition: 'all 0.8s ease',
                 animation: isListening ? 'pulse 1.5s infinite' : 'none',
                 cursor: step === 'greeting' ? 'pointer' : 'default',
-                border: `3px solid ${finalGlowColor}60`
+                border: `2px solid ${glowColor}60`
             }}
-                onClick={step === 'greeting' ? handleStartClick : undefined}
-            >
-                <div style={{
-                    width: '80px',
-                    height: '80px',
-                    borderRadius: '50%',
-                    background: '#0a0a0a',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '36px',
-                    filter: 'brightness(1.2)'
-                }}>
+                onClick={step === 'greeting' ? handleStartClick : undefined}>
+                <span style={{ fontSize: '40px' }}>
                     {step === 'greeting' && '🌟'}
                     {step === 'ask_name' && isListening && '🎤'}
                     {step === 'ask_name' && isSpeaking && '👤'}
-                    {step === 'learning' && teacher === 'hasan' && '📖'}
-                    {step === 'learning' && teacher === 'ayisha' && '📚'}
-                </div>
+                    {step === 'learning' && '📖'}
+                </span>
             </div>
 
-            {/* Статус */}
             <div style={{
-                marginTop: '30px',
-                color: finalGlowColor,
-                fontSize: '16px',
-                fontWeight: '500',
+                marginTop: '24px',
+                color: glowColor,
+                fontSize: '14px',
                 textAlign: 'center',
-                opacity: 0.8,
-                letterSpacing: '1px',
-                transition: 'color 0.8s ease'
+                opacity: 0.9
             }}>
-                {step === 'greeting' && 'Нажми на свет, чтобы начать'}
-                {step === 'ask_name' && isListening && 'Я слушаю тебя...'}
-                {step === 'ask_name' && isSpeaking && 'Учитель спрашивает...'}
-                {step === 'learning' && (teacher === 'hasan' ? 'Хасан ждет твоего выбора' : 'Аиша готова помочь')}
+                {step === 'greeting' && 'Нажми на свет'}
+                {step === 'ask_name' && isListening && 'Говорите...'}
+                {step === 'ask_name' && isSpeaking && 'Учитель говорит...'}
+                {step === 'learning' && `${teacher === 'hasan' ? 'Хасан' : 'Аиша'} с вами`}
             </div>
 
-            {/* Кнопки выбора суры (только в режиме обучения) */}
             {step === 'learning' && (
-                <div style={{
-                    marginTop: '40px',
-                    display: 'flex',
-                    gap: '20px'
-                }}>
+                <div style={{ marginTop: '40px', display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
                     {[
                         { num: 112, name: 'Аль-Ихляс' },
                         { num: 1, name: 'Аль-Фатиха' },
                         { num: 103, name: 'Аль-Аср' }
-                    ].map(surah => (
+                    ].map(s => (
                         <button
-                            key={surah.num}
-                            onClick={() => loadSurah(surah.num)}
+                            key={s.num}
+                            onClick={() => loadSurah(s.num)}
                             style={{
-                                padding: '12px 24px',
-                                background: 'transparent',
-                                border: `2px solid ${finalGlowColor}40`,
-                                borderRadius: '12px',
-                                color: finalGlowColor,
+                                padding: '12px 20px',
+                                background: `${glowColor}20`,
+                                border: `1px solid ${glowColor}40`,
+                                borderRadius: '10px',
+                                color: glowColor,
                                 cursor: 'pointer',
-                                fontSize: '14px',
-                                fontWeight: '500',
-                                transition: 'all 0.3s ease'
-                            }}
-                            onMouseEnter={(e) => {
-                                e.target.style.background = `${finalGlowColor}20`;
-                                e.target.style.borderColor = finalGlowColor;
-                            }}
-                            onMouseLeave={(e) => {
-                                e.target.style.background = 'transparent';
-                                e.target.style.borderColor = `${finalGlowColor}40`;
-                            }}
-                        >
-                            {surah.name}
+                                fontSize: '13px'
+                            }}>
+                            {s.name}
                         </button>
                     ))}
                 </div>
             )}
 
-            {/* Отображение аятов */}
             {verses.length > 0 && (
                 <div style={{
-                    marginTop: '30px',
-                    padding: '30px',
+                    marginTop: '24px',
+                    padding: '20px',
                     background: '#1a1a1a',
-                    borderRadius: '16px',
-                    border: '1px solid #333',
-                    maxWidth: '600px',
-                    width: '90%'
+                    borderRadius: '12px',
+                    maxWidth: '90%',
+                    width: '400px'
                 }}>
                     <p style={{
-                        fontSize: '28px',
+                        fontSize: '24px',
                         textAlign: 'right',
                         fontFamily: 'serif',
                         lineHeight: 2,
-                        color: finalGlowColor,
+                        color: glowColor,
                         margin: 0,
                         direction: 'rtl'
                     }}>
@@ -401,9 +334,9 @@ export default function App() {
 
             <style>{`
         @keyframes pulse {
-          0% { transform: scale(1); opacity: 1; }
-          50% { transform: scale(1.05); opacity: 0.8; }
-          100% { transform: scale(1); opacity: 1; }
+          0% { transform: scale(1); }
+          50% { transform: scale(1.05); }
+          100% { transform: scale(1); }
         }
       `}</style>
         </div>
