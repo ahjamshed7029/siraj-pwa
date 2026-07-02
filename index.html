@@ -3,45 +3,14 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-    <title>Siraj</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        html,
-        body {
-            height: 100%;
-            background: #000;
-        }
-
-        #root {
-            height: 100%;
-        }
-    </style>
-
-    <script>
-        (function () {
-            const OriginalSR = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!OriginalSR) return;
-
-            let lastStartTimestamp = 0;
-
-            OriginalSR.prototype.start = function () {
-                const now = Date.now();
-                // Если метод .start() вызывается чаще чем раз в 2 секунды — это спам-петля, блокируем её!
-                if (now - lastStartTimestamp < 2000) {
-                    console.warn("[Anti-Loop] Заблокирован слишком быстрый автоматический перезапуск микрофона.");
-                    return;
-                }
-                lastStartTimestamp = now;
-                return OriginalSR.prototype.start.apply(this, arguments);
-            };
-        })();
-    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Коран PWA" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <title>Голосовой Коран</title>
 </head>
 
 <body>

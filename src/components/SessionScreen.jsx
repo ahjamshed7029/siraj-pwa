@@ -202,20 +202,22 @@ export default function SessionScreen() {
         u.volume = 1;
 
         u.onend = () => {
-            // После речи - слушаем снова
+            // После успешного завершения речи бота — плавно включаем микрофон
             setTimeout(() => {
                 if (!recognitionRef.current && !isProcessing) {
+                    console.log("Бот договорил, запускаем микрофон...");
                     startListening();
                 }
-            }, 500);
+            }, 800); // Немного увеличили паузу (до 800мс), чтобы аудио-канал успел полностью освободиться
         };
 
-        u.onerror = () => {
-            setTimeout(() => {
-                if (!recognitionRef.current && !isProcessing) {
-                    startListening();
-                }
-            }, 500);
+        u.onerror = (event) => {
+            console.error("Ошибка синтеза речи (TTS):", event);
+
+            // Защита: Если озвучка упала, НЕ запускаем микрофон автоматически!
+            // Это разрывает бесконечную петлю [Anti-Loop]
+            setDebug('⚠️ Ошибка вывода звука. Нажми на микрофон вручную.');
+            setListening(false);
         };
 
         window.speechSynthesis.speak(u);
@@ -239,11 +241,10 @@ export default function SessionScreen() {
             return;
         }
 
-        // Иначе запускаем
+        // Иначе запускаем вручную
         setDebug('👆 Нажата кнопка');
         startListening();
     }
-
     // ИНИЦИАЛИЗАЦИЯ
     useEffect(() => {
         // Проверка поддержки
