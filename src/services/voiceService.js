@@ -1,5 +1,5 @@
 // voiceService.js - Исправленный способ записи голоса с защитой от Anti-Loop
-
+import { useAppStore } from '../store/useAppStore';
 export class VoiceRecorder {
     constructor() {
         this.mediaRecorder = null;
@@ -158,7 +158,7 @@ export class VoiceRecorder {
         }
     }
 
-    fallbackToWebSpeech() {
+        fallbackToWebSpeech() {
         if (this.activeFallbackRecognition) return;
 
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -170,12 +170,22 @@ export class VoiceRecorder {
         const r = new SR();
         this.activeFallbackRecognition = r;
 
-        r.lang = 'uz-UZ'; // Изменено на uz-UZ для соответствия приложению
+        // БЕРЕМ язык из стора, если нет — по умолчанию арабский (ar-SA)
+        const currentLang = useAppStore.getState().detectedLang || 'ar-SA';
+        r.lang = currentLang; 
+        
         r.continuous = false;
         r.interimResults = false;
 
         r.onresult = (ev) => {
             const text = ev.results[0][0].transcript;
+            
+            // Сохраняем определенный язык в стор для будущих запросов
+            const detected = ev.results[0][0].lang;
+            if (detected) {
+                useAppStore.getState().setDetectedLang(detected);
+            }
+
             if (this.onResult) this.onResult(text);
         };
 
