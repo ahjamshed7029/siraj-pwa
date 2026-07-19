@@ -11,3 +11,4 @@ dist/
 .idea/
 *.log
 "@ | Out-File -FilePath .gitignore -Encoding UTF8
+.vercel
