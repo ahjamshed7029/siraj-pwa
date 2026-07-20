@@ -1,50 +1,51 @@
-// src/components/LaunchScreen.jsx
 import { useAppStore } from '../store/useAppStore';
-import { useVoiceAgent } from '../hooks/useVoiceAgent'; // Импортируем наш новый хук
 
 export default function LaunchScreen() {
     const launch = useAppStore((s) => s.launch);
     const setListening = useAppStore((s) => s.setListening);
-    const { processVoiceInput } = useVoiceAgent();
 
     const handleStart = async () => {
-        launch(); // Меняем стейт на запущенный
+        console.log("🔴 КНОПКА ПУСК НАЖАТА!");
         
+        launch();
+
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
-            alert('Ваш браузер не поддерживает голосовой ввод. Используйте Chrome.');
+            alert('Speech recognition not supported. Use Chrome.');
             return;
         }
 
         const recognition = new SpeechRecognition();
-        recognition.lang = 'ar-SA'; // Начинаем с арабского, но ИИ поймет и другой
+        recognition.lang = 'ar-SA';
         recognition.interimResults = false;
         recognition.continuous = false;
 
         recognition.onstart = () => {
+            console.log('🎤 Listening...');
             setListening(true);
-            console.log('🎤 Слушаю...');
         };
 
         recognition.onresult = (event) => {
             const text = event.results[0][0].transcript;
-            const lang = event.results[0][0].lang; // Браузер сам определит ar-RU, en-US и т.д.
-            processVoiceInput(text, lang); // Отправляем в "мозг"
+            const lang = event.results[0][0].lang;
+            console.log('👂 Recognized:', text, 'Lang:', lang);
+            setListening(false);
         };
 
         recognition.onerror = (event) => {
-            console.error('Ошибка микрофона:', event.error);
+            console.error(' Error:', event.error);
             setListening(false);
         };
 
         recognition.onend = () => {
+            console.log(' Microphone stopped');
             setListening(false);
         };
 
         try {
             recognition.start();
         } catch (e) {
-            console.error('Не удалось запустить микрофон:', e);
+            console.error('❌ Failed to start:', e);
         }
     };
 
@@ -77,8 +78,7 @@ export default function LaunchScreen() {
                     fontSize: '20px',
                     fontWeight: 700,
                     cursor: 'pointer',
-                    letterSpacing: '2px',
-                    animation: 'pulse 2s infinite' // Добавь эту анимацию в CSS если хочешь
+                    letterSpacing: '2px'
                 }}
             >
                 ПУСК
