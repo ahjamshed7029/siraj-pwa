@@ -1,30 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { callGemini } from './services/geminiClient'; // Импортируем ИИ
 
 export default function App() {
-    const [step, setStep] = useState('greeting');
+    const [step, setStep] = useState('greeting'); // greeting, ask_name, learning
     const [userName, setUserName] = useState('');
     const [teacher, setTeacher] = useState(null);
     const [verses, setVerses] = useState([]);
     const [currentIndex, setCurrentIndex] = useState(0);
     const [currentSurah, setCurrentSurah] = useState(null);
+    
     const [isListening, setIsListening] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [isThinking, setIsThinking] = useState(false);
+    
+    // Динамический язык (по умолчанию арабский)
+    const [detectedLang, setDetectedLang] = useState('ar-SA');
 
     const recognitionRef = useRef(null);
     const isManualStopRef = useRef(false);
 
-    // Инициализация Speech Recognition
+    // 1. Инициализация Speech Recognition ТОЛЬКО ОДИН РАЗ (убрали зависимость от step)
     useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
-            alert('Ваш браузер не поддерживает распознавание речи');
+            console.warn('Speech recognition not supported');
             return;
         }
 
         const rec = new SpeechRecognition();
-        rec.lang = 'ru-RU';
+        rec.lang = detectedLang; // Используем динамический язык
         rec.interimResults = false;
-        rec.maxAlternatives = 1;
         rec.continuous = false;
 
         rec.onstart = () => {
@@ -35,45 +40,24 @@ export default function App() {
         rec.onend = () => {
             console.log('🎤 Микрофон выключен');
             setIsListening(false);
-
-            // Автоперезапуск только если не ручная остановка и мы ждем имя
-            if (!isManualStopRef.current && step === 'ask_name') {
-                console.log('🔄 Автоперезапуск через 500мс...');
-                setTimeout(() => {
-                    try {
-                        if (recognitionRef.current) {
-                            recognitionRef.current.start();
-                            console.log('✅ Автоперезапуск успешен');
-                        }
-                    } catch (e) {
-                        console.log('❌ Ошибка автоперезапуска:', e.message);
-                    }
-                }, 500);
-            }
         };
 
         rec.onerror = (e) => {
-            console.error('❌ Ошибка:', e.error);
+            console.error('❌ Ошибка микрофона:', e.error);
             setIsListening(false);
-
-            if (e.error === 'no-speech') {
-                console.log('🔇 Тишина, перезапускаем...');
-                setTimeout(() => {
-                    try {
-                        recognitionRef.current?.start();
-                    } catch (err) {
-                        console.log('Не удалось перезапустить после ошибки');
-                    }
-                }, 300);
-            }
+            isManualStopRef.current = false;
         };
 
-        rec.onresult = (event) => {
+        rec.onresult = async (event) => {
             const resultText = event.results[0][0].transcript.trim();
-            console.log('🗣️ Распознано:', resultText);
+            // Браузер возвращает реальный распознанный язык (например, 'ru-RU' или 'ar-SA')
+            const browserDetectedLang = event.results[0][0].lang || detectedLang;
+            setDetectedLang(browserDetectedLang);
+            
+            console.log(`🗣️ Распознано (${browserDetectedLang}):`, resultText);
 
-            if (resultText) {
-                processVoiceInput(resultText);
+            if (resultText && !isManualStopRef.current) {
+                await processVoiceInput(resultText, browserDetectedLang);
             }
         };
 
@@ -85,142 +69,92 @@ export default function App() {
                 recognitionRef.current.abort();
             }
         };
-    }, [step]);
+    }, [detectedLang]); // Пересоздаем только если язык сменился
 
-    const speakAndListen = (text) => {
-        // Останавливаем текущую речь и микрофон
+    // 2. Функция "Сказать и потом слушать" (исправленная, без багов)
+    const speakThenListen = async (text, lang = 'ar-SA') => {
         window.speechSynthesis.cancel();
-
         isManualStopRef.current = true;
-        if (recognitionRef.current) {
-            try {
-                recognitionRef.current.abort();
-            } catch (e) { }
-        }
+        if (recognitionRef.current) recognitionRef.current.abort();
 
         const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = 'ru-RU';
+        utterance.lang = lang;
         utterance.rate = 0.9;
-        utterance.pitch = 1.0;
 
-        utterance.onstart = () => {
-            console.log('🔊 Учитель говорит...');
-            setIsSpeaking(true);
-        };
-
+        utterance.onstart = () => setIsSpeaking(true);
+        
         utterance.onend = () => {
-            console.log('🔇 Учитель закончил');
             setIsSpeaking(false);
             isManualStopRef.current = false;
-
-            // Запускаем микрофон с задержкой
+            
+            // Запускаем микрофон после того, как агент закончил говорить
             setTimeout(() => {
-                if (step === 'ask_name' && recognitionRef.current) {
+                if (recognitionRef.current && !isManualStopRef.current) {
                     try {
                         recognitionRef.current.start();
-                        console.log('🎤 Микрофон запущен после речи');
                     } catch (e) {
-                        console.error('❌ Ошибка запуска:', e.message);
-                        // Пробуем еще раз
-                        setTimeout(() => {
-                            try {
-                                recognitionRef.current?.start();
-                            } catch (e2) {
-                                console.error('❌ Повторная ошибка');
-                            }
-                        }, 1000);
+                        console.error('Ошибка запуска микрофона:', e);
                     }
                 }
-            }, 300);
-        };
-
-        utterance.onerror = (e) => {
-            console.error('Ошибка синтеза речи:', e);
-            setIsSpeaking(false);
-            isManualStopRef.current = false;
+            }, 500);
         };
 
         window.speechSynthesis.speak(utterance);
+    };
+
+    // 3. Обработка голоса пользователя
+    const processVoiceInput = async (voiceText, lang) => {
+        if (step === 'ask_name') {
+            setUserName(voiceText);
+            const isFemale = voiceText.toLowerCase().match(/(а|я|ия|марьям|аиша|фатима)$/);
+            const assignedTeacher = isFemale ? 'ayisha' : 'hasan';
+            setTeacher(assignedTeacher);
+            setStep('learning');
+            
+            const welcome = assignedTeacher === 'ayisha' 
+                ? `Здравствуй, ${voiceText}! Я Аиша. Давай изучать Коран вместе.` 
+                : `Приветствую, ${voiceText}! Я Хасан. Начнем изучение.`;
+            
+            speakThenListen(welcome, lang);
+            return;
+        }
+
+        if (step === 'learning') {
+            setIsThinking(true);
+            // Отправляем в ИИ (Gemini)
+            const aiResponse = await callGemini(voiceText, lang);
+            setIsThinking(false);
+            
+            // Агент говорит ответ ИИ
+            speakThenListen(aiResponse, lang);
+        }
     };
 
     const handleStartClick = () => {
         setStep('ask_name');
-        speakAndListen("Ассаляму алейкум! Скажи, пожалуйста, как тебя зовут?");
-    };
-
-    const autoSelectTeacher = (name) => {
-        const lowerName = name.toLowerCase().trim();
-
-        // Женские имена и окончания
-        const femalePatterns = ['а', 'я', 'ия', 'ья'];
-        const isFemaleEnding = femalePatterns.some(end => lowerName.endsWith(end));
-
-        const femaleNames = ['марьям', 'аиша', 'фатима', 'зейнаб', 'хадиджа', 'амина',
-            'сара', 'мария', 'анна', 'софия', 'алиса', 'милана', 'алина',
-            'мадина', 'айша', 'хава', 'асия'];
-        const isFemaleName = femaleNames.some(n => lowerName.includes(n));
-
-        const childPatterns = ['чка', 'нька', 'ушка', 'ик', 'ек'];
-        const isChildish = childPatterns.some(p => lowerName.includes(p));
-
-        return (isFemaleEnding || isFemaleName || isChildish) ? 'ayisha' : 'hasan';
-    };
-
-    const processVoiceInput = (voiceText) => {
-        if (!voiceText || step !== 'ask_name') return;
-
-        // Останавливаем микрофон
-        isManualStopRef.current = true;
-        if (recognitionRef.current) {
-            recognitionRef.current.abort();
-        }
-
-        setUserName(voiceText);
-        const assignedTeacher = autoSelectTeacher(voiceText);
-        setTeacher(assignedTeacher);
-        setStep('learning');
-
-        const welcomeText = assignedTeacher === 'ayisha'
-            ? `Здравствуй, ${voiceText}! Я Аиша. Давай изучать Коран вместе. Выбери суру.`
-            : `Приветствую, ${voiceText}! Я Хасан. Начнем изучение. Выбери суру.`;
-
-        const utterance = new SpeechSynthesisUtterance(welcomeText);
-        utterance.lang = 'ru-RU';
-        utterance.rate = 0.9;
-        utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
-        window.speechSynthesis.speak(utterance);
+        speakThenListen("أهلاً بك! من فضلك، ما اسمك؟", 'ar-SA'); // Начинаем с арабского приветствия
     };
 
     const loadSurah = async (surahNum) => {
         try {
             const res = await fetch(`https://api.alquran.cloud/v1/surah/${surahNum}/ar.alafasy`);
             const data = await res.json();
-
             if (data.data?.verses) {
                 setVerses(data.data.verses);
                 setCurrentSurah(surahNum);
-
-                const text = teacher === 'hasan'
-                    ? "Слушай аяты и повторяй."
-                    : "Слушай внимательно, я помогу.";
-
-                const utterance = new SpeechSynthesisUtterance(text);
-                utterance.lang = 'ru-RU';
-                utterance.onstart = () => setIsSpeaking(true);
-                utterance.onend = () => setIsSpeaking(false);
-                window.speechSynthesis.speak(utterance);
+                setCurrentIndex(0);
+                speakThenListen("Слушай аяты и повторяй за мной.", detectedLang);
             }
         } catch (e) {
-            console.error('Ошибка загрузки:', e);
+            console.error('Ошибка загрузки суры:', e);
         }
     };
 
     const getGlowColor = () => {
-        if (isSpeaking) return '#9C27B0';
-        if (isListening) return '#4CAF50';
-        if (step === 'greeting') return '#FFD700';
-        return '#2196F3';
+        if (isThinking) return '#9C27B0'; // Фиолетовый: думает
+        if (isSpeaking) return '#2196F3'; // Синий: говорит
+        if (isListening) return '#4CAF50'; // Зеленый: слушает
+        return '#FFD700'; // Золотой: ожидание
     };
 
     const glowColor = getGlowColor();
@@ -237,7 +171,6 @@ export default function App() {
             position: 'relative',
             overflow: 'hidden'
         }}>
-
             <div style={{
                 position: 'absolute',
                 width: '300px',
@@ -258,30 +191,32 @@ export default function App() {
                 justifyContent: 'center',
                 boxShadow: `0 0 50px ${glowColor}80, 0 0 100px ${glowColor}40`,
                 transition: 'all 0.8s ease',
-                animation: isListening ? 'pulse 1.5s infinite' : 'none',
+                animation: (isListening || isThinking) ? 'pulse 1.5s infinite' : 'none',
                 cursor: step === 'greeting' ? 'pointer' : 'default',
                 border: `2px solid ${glowColor}60`
-            }}
-                onClick={step === 'greeting' ? handleStartClick : undefined}>
+            }} onClick={step === 'greeting' ? handleStartClick : undefined}>
                 <span style={{ fontSize: '40px' }}>
                     {step === 'greeting' && '🌟'}
-                    {step === 'ask_name' && isListening && '🎤'}
-                    {step === 'ask_name' && isSpeaking && '👤'}
-                    {step === 'learning' && '📖'}
+                    {isListening && '🎤'}
+                    {isThinking && '🧠'}
+                    {isSpeaking && '🔊'}
+                    {step === 'learning' && !isListening && !isSpeaking && '📖'}
                 </span>
             </div>
 
             <div style={{
                 marginTop: '24px',
                 color: glowColor,
-                fontSize: '14px',
+                fontSize: '16px',
                 textAlign: 'center',
-                opacity: 0.9
+                opacity: 0.9,
+                fontWeight: 500
             }}>
-                {step === 'greeting' && 'Нажми на свет'}
-                {step === 'ask_name' && isListening && 'Говорите...'}
-                {step === 'ask_name' && isSpeaking && 'Учитель говорит...'}
-                {step === 'learning' && `${teacher === 'hasan' ? 'Хасан' : 'Аиша'} с вами`}
+                {step === 'greeting' && 'Нажми на свет, чтобы начать / اضغط للبدء'}
+                {isListening && 'Слушаю... / أستمع...'}
+                {isThinking && 'Думаю... / أفكر...'}
+                {isSpeaking && 'Говорю... / أتحدث...'}
+                {step === 'learning' && !isListening && !isSpeaking && 'Готов к вопросам / أنا جاهز'}
             </div>
 
             {step === 'learning' && (
@@ -291,18 +226,15 @@ export default function App() {
                         { num: 1, name: 'Аль-Фатиха' },
                         { num: 103, name: 'Аль-Аср' }
                     ].map(s => (
-                        <button
-                            key={s.num}
-                            onClick={() => loadSurah(s.num)}
-                            style={{
-                                padding: '12px 20px',
-                                background: `${glowColor}20`,
-                                border: `1px solid ${glowColor}40`,
-                                borderRadius: '10px',
-                                color: glowColor,
-                                cursor: 'pointer',
-                                fontSize: '13px'
-                            }}>
+                        <button key={s.num} onClick={() => loadSurah(s.num)} style={{
+                            padding: '12px 20px',
+                            background: `${glowColor}20`,
+                            border: `1px solid ${glowColor}40`,
+                            borderRadius: '10px',
+                            color: glowColor,
+                            cursor: 'pointer',
+                            fontSize: '14px'
+                        }}>
                             {s.name}
                         </button>
                     ))}
@@ -316,29 +248,34 @@ export default function App() {
                     background: '#1a1a1a',
                     borderRadius: '12px',
                     maxWidth: '90%',
-                    width: '400px'
+                    width: '400px',
+                    border: `1px solid ${glowColor}30`
                 }}>
                     <p style={{
-                        fontSize: '24px',
+                        fontSize: '26px',
                         textAlign: 'right',
                         fontFamily: 'serif',
                         lineHeight: 2,
-                        color: glowColor,
+                        color: '#FFD700',
                         margin: 0,
                         direction: 'rtl'
                     }}>
                         {verses[currentIndex]?.text}
                     </p>
+                    <div style={{display: 'flex', justifyContent: 'space-between', marginTop: '15px'}}>
+                         <button onClick={() => setCurrentIndex(Math.max(0, currentIndex - 1))} disabled={currentIndex === 0} style={{color: '#fff', background: 'transparent', border: 'none', cursor: 'pointer'}}>◀️ Назад</button>
+                         <button onClick={() => setCurrentIndex(Math.min(verses.length - 1, currentIndex + 1))} disabled={currentIndex === verses.length - 1} style={{color: '#fff', background: 'transparent', border: 'none', cursor: 'pointer'}}>Вперёд ▶️</button>
+                    </div>
                 </div>
             )}
 
             <style>{`
-        @keyframes pulse {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.05); }
-          100% { transform: scale(1); }
-        }
-      `}</style>
+                @keyframes pulse {
+                    0% { transform: scale(1); box-shadow: 0 0 50px ${glowColor}80; }
+                    50% { transform: scale(1.05); box-shadow: 0 0 80px ${glowColor}cc; }
+                    100% { transform: scale(1); box-shadow: 0 0 50px ${glowColor}80; }
+                }
+            `}</style>
         </div>
     );
 }
