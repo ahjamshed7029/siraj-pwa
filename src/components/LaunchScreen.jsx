@@ -4,50 +4,40 @@ export default function LaunchScreen() {
     const launch = useAppStore((s) => s.launch);
     const setListening = useAppStore((s) => s.setListening);
 
-    const handleStart = async () => {
-        console.log("🔴 КНОПКА ПУСК НАЖАТА!");
-        
-        launch();
+    // src/App.jsx -> найди handleStartClick и замени
+const handleStartClick = async () => {
+  // 1. ВАЖНО: разблокируем аудио (иначе в PWA тишина)
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContext();
+    if (ctx.state === 'suspended') await ctx.resume();
+    // короткий пустой звук чтобы разбудить систему
+    const oscillator = ctx.createOscillator();
+    oscillator.connect(ctx.destination);
+    oscillator.start();
+    oscillator.stop();
+  } catch(e) {}
 
-        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            alert('Speech recognition not supported. Use Chrome.');
-            return;
-        }
-
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'ar-SA';
-        recognition.interimResults = false;
-        recognition.continuous = false;
-
-        recognition.onstart = () => {
-            console.log('🎤 Listening...');
-            setListening(true);
-        };
-
-        recognition.onresult = (event) => {
-            const text = event.results[0][0].transcript;
-            const lang = event.results[0][0].lang;
-            console.log('👂 Recognized:', text, 'Lang:', lang);
-            setListening(false);
-        };
-
-        recognition.onerror = (event) => {
-            console.error(' Error:', event.error);
-            setListening(false);
-        };
-
-        recognition.onend = () => {
-            console.log(' Microphone stopped');
-            setListening(false);
-        };
-
-        try {
-            recognition.start();
-        } catch (e) {
-            console.error('❌ Failed to start:', e);
-        }
-    };
+  // 2. Просим микрофон
+  try {
+    await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch(e) {
+    alert('Дай доступ к микрофону');
+    return;
+  }
+  
+  // 3. Прогреваем голоса для Айиши/Хасана
+  window.speechSynthesis.getVoices();
+  if (window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+  }
+  
+  // 4. Твоя логика дальше...
+  console.log("🔴 ПУСК");
+  setStep('ask_name');
+  await new Promise(r => setTimeout(r, 100));
+  await speakAsTeacher('Ассаляму алейкум! Как тебя зовут?', teacher || 'hasan');
+};
 
     return (
         <div style={{

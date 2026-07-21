@@ -12,3 +12,4 @@ dist/
 *.log
 "@ | Out-File -FilePath .gitignore -Encoding UTF8
 .vercel
+.env*

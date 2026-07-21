@@ -1,136 +1,83 @@
 import { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
+import { isSpeaking, stopTTS } from '../services/ttsService';
 
 export function useSpeechRecognition() {
-    const setListening = useAppStore((s) => s.setListening);
-    const setTranscript = useAppStore((s) => s.setTranscript);
-    const detectedLang = useAppStore((s) => s.detectedLang);
-
-    // Ссылка на инстанс распознавания
+    const setListening = useAppStore(s => s.setListening);
     const recognitionRef = useRef(null);
-    // Флаг для предотвращения race conditions при остановке
-    const isStoppingRef = useRef(false);
+    const shouldRestartRef = useRef(true); // главный флаг для Алисы
 
-    const stopListening = useCallback(() => {
+    const stopListening = useCallback((permanent = false) => {
+        if (permanent) shouldRestartRef.current = false;
+
         if (recognitionRef.current) {
-            isStoppingRef.current = true;
-
-            // Отвязываем обработчик завершения, чтобы не дергать стейты лишний раз
-            recognitionRef.current.onend = null;
-            recognitionRef.current.onerror = null;
-
             try {
-                recognitionRef.current.stop(); // Мягкая остановка (сохраняет надиктованный текст)
-            } catch (e) {
-                try {
-                    recognitionRef.current.abort(); // Жесткий сброс, если stop() не сработал
-                } catch (err) {
-                    console.warn("Поток уже был остановлен:", err);
-                }
-            }
-
+                recognitionRef.current.onend = null;
+                recognitionRef.current.abort();
+            } catch(e) {}
             recognitionRef.current = null;
-            setListening(false);
         }
+        setListening(false);
     }, [setListening]);
 
     const startListening = useCallback(async (onResult) => {
+        shouldRestartRef.current = true;
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-            alert('Speech recognition is not supported. Please use Chrome.');
-            return null;
-        }
+        if (!SpeechRecognition) return;
 
-        // 1. Проверяем / запрашиваем доступ к микрофону перед запуском логики
-        try {
-            await navigator.mediaDevices.getUserMedia({ audio: true });
-        } catch (e) {
-            alert("Нет доступа к микрофону");
-            console.error(e);
-            return null;
-        }
+        try { await navigator.mediaDevices.getUserMedia({ audio: true }); } catch(e) { return; }
 
-        // 2. ЗАЩИТА: Если старый инстанс уже существует и работает — полностью обнуляем его
-        if (recognitionRef.current) {
-            try {
-                recognitionRef.current.onstart = null;
-                recognitionRef.current.onend = null;
-                recognitionRef.current.onerror = null;
-                recognitionRef.current.onresult = null;
-                recognitionRef.current.abort(); // Выжигаем старый процесс
-            } catch (e) {
-                console.warn("Ошибка при сбросе старого инстанса:", e);
-            }
-        }
+        // если уже работает - не запускаем второй раз
+        if (recognitionRef.current) return;
 
-        isStoppingRef.current = false;
         const recognition = new SpeechRecognition();
         recognitionRef.current = recognition;
+        recognition.continuous = false; // для Алисы лучше false + рестарт
+        recognition.interimResults = true; // ВАЖНО для barge-in
+        recognition.lang = useAppStore.getState().detectedLang || 'ru-RU';
 
-        // Настройки Web Speech API
-        recognition.continuous = false; // Выключаемся автоматически после одной законченной фразы
-        recognition.interimResults = false; // Игнорируем промежуточные результаты, ждем финал
-        recognition.lang = detectedLang || navigator.language || 'ru-RU';
+        recognition.onstart = () => setListening(true);
 
-        // Handler начала записи
-        recognition.onstart = () => {
-            if (!isStoppingRef.current) {
-                setListening(true);
-            }
-        };
-
-        // Handler успешного получения текста
+        // Фишка Алисы - перебивание
         recognition.onresult = (event) => {
-            const lastIndex = event.results.length - 1;
-            const transcript = event.results[lastIndex][0].transcript;
-            const confidence = event.results[lastIndex][0].confidence;
+            const transcript = event.results[event.results.length - 1][0].transcript;
+            const isFinal = event.results[event.results.length - 1].isFinal;
 
-            setTranscript(transcript);
-
-            const detected = event.results[lastIndex][0].lang;
-            if (detected) {
-                useAppStore.getState().setDetectedLang(detected);
+            // Если мы говорим и пользователь начал говорить - перебиваем
+            if (!isFinal && isSpeaking()) {
+                stopTTS();
             }
 
-            // Мягко гасим микрофон, так как фраза уже получена
-            stopListening();
-
-            // Передаем текст в ИИ (FastAPI / Next.js роут)
-            if (onResult) {
-                onResult(transcript, confidence);
+            if (isFinal) {
+                const text = transcript.trim();
+                if (text) {
+                    useAppStore.getState().setTranscript(text);
+                    stopListening(); // стопаем перед обработкой
+                    onResult?.(text);
+                }
             }
         };
 
-        // Handler ошибок (главный щит от зацикливания)
-        recognition.onerror = (event) => {
-            // Если это штатный сброс микрофона или пользователь промолчал — просто выходим
-            if (event.error === 'aborted' || event.error === 'no-speech') {
-                console.warn('Распознавание остановлено в штатном режиме:', event.error);
-                return;
+        recognition.onerror = (e) => {
+            if (e.error === 'no-speech' || e.error === 'aborted') {
+                // просто рестарт
+            } else {
+                console.error(e);
             }
-
-            // Любые другие критические ошибки (audio-capture, not-allowed)
-            console.error('Критическая ошибка Speech Recognition:', event.error);
-            stopListening();
         };
 
-        // Handler полного закрытия потока браузером
         recognition.onend = () => {
-            if (!isStoppingRef.current) {
-                setListening(false);
-                recognitionRef.current = null;
+            recognitionRef.current = null;
+            setListening(false);
+            // АВТО-РЕСТАРТ как у Алисы, если мы не в режиме SPEAKING/THINKING
+            const { glow } = useAppStore.getState();
+            if (shouldRestartRef.current &&!glow) {
+                setTimeout(() => startListening(onResult), 300);
             }
         };
 
-        // Запуск сессии распознавания
-        try {
-            recognition.start();
-        } catch (e) {
-            console.error("Не удалось запустить Speech Recognition:", e);
-        }
-
-        return recognition;
-    }, [detectedLang, setListening, setTranscript, stopListening]);
+        try { recognition.start(); } catch(e) { recognitionRef.current = null; }
+    }, [setListening, stopListening]);
 
     return { startListening, stopListening };
 }

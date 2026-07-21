@@ -1,21 +1,39 @@
 // src/services/ttsService.js
-export function speakText(text, lang = 'ar-SA') {
-  if (!('speechSynthesis' in window)) {
-    console.warn('Speech synthesis not supported');
-    return;
-  }
+let currentUtterance = null;
 
-  // Останавливаем предыдущую речь, если она есть
+export function speakText(text, lang) {
+  return new Promise((resolve) => {
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = lang || 'ru-RU';
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+
+    const voices = window.speechSynthesis.getVoices();
+    const voice = voices.find(v => v.lang === utterance.lang) ||
+                  voices.find(v => v.lang.startsWith(utterance.lang.split('-')[0]));
+    if (voice) utterance.voice = voice;
+
+    currentUtterance = utterance;
+    utterance.onend = () => {
+      currentUtterance = null;
+      resolve();
+    };
+    utterance.onerror = () => {
+      currentUtterance = null;
+      resolve(); // важно не reject, чтобы не ломать диалог
+    };
+
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+export function stopTTS() {
   window.speechSynthesis.cancel();
+  currentUtterance = null;
+}
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  
-  // Настройка языка (браузер сам найдет подходящий голос)
-  utterance.lang = lang; 
-  utterance.rate = 0.9; // Чуть медленнее для четкости (особенно для арабского)
-  utterance.pitch = 1;
-
-  utterance.onerror = (e) => console.error('TTS Error:', e);
-  
-  window.speechSynthesis.speak(utterance);
+export function isSpeaking() {
+  return window.speechSynthesis.speaking;
 }
