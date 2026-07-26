@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.sirajapp.quran",
+      "sha256_cert_fingerprints": [
+        "36:90:60:4E:85:CC:C4:1F:AD:00:47:0E:BF:81:39:0C:78:F2:DE:5A:C2:38:7A:05:0C:E5:7F:C0:1A:B5:2B:23"
+      ]
+    }
+  }
+]

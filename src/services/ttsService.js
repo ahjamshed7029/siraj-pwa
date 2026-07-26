@@ -1,28 +1,45 @@
-// src/services/ttsService.js
+// services/ttsService.js
+
 let currentUtterance = null;
 
-export function speakText(text, lang) {
+export function speakTeacherComment(text, teacher, callback) {
   return new Promise((resolve) => {
-    window.speechSynthesis.cancel();
+    if (!window.speechSynthesis) {
+      console.warn('Speech synthesis not supported');
+      if (callback) callback();
+      resolve();
+      return;
+    }
+
+    // Останавливаем текущую речь
+    stopTTS();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = lang || 'ru-RU';
-    utterance.rate = 0.95;
-    utterance.pitch = 1;
+    utterance.lang = 'ru-RU';
+    utterance.rate = 0.9;
+    utterance.pitch = 1.0;
 
-    const voices = window.speechSynthesis.getVoices();
-    const voice = voices.find(v => v.lang === utterance.lang) ||
-                  voices.find(v => v.lang.startsWith(utterance.lang.split('-')[0]));
-    if (voice) utterance.voice = voice;
+    // Разный голос для учителей
+    if (teacher === 'hassan') {
+      utterance.pitch = 0.8;
+      utterance.rate = 0.85;
+    } else {
+      utterance.pitch = 1.2;
+      utterance.rate = 0.9;
+    }
 
     currentUtterance = utterance;
+
     utterance.onend = () => {
       currentUtterance = null;
+      if (callback) callback();
       resolve();
     };
+
     utterance.onerror = () => {
       currentUtterance = null;
-      resolve(); // важно не reject, чтобы не ломать диалог
+      if (callback) callback();
+      resolve();
     };
 
     window.speechSynthesis.speak(utterance);
@@ -30,10 +47,8 @@ export function speakText(text, lang) {
 }
 
 export function stopTTS() {
-  window.speechSynthesis.cancel();
+  if (window.speechSynthesis) {
+    window.speechSynthesis.cancel();
+  }
   currentUtterance = null;
-}
-
-export function isSpeaking() {
-  return window.speechSynthesis.speaking;
 }

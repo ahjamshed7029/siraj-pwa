@@ -1,43 +1,52 @@
-const BASE = 'https://api.alquran.cloud/v1';
+import surahsData from '../data/surahs.json';
 
-// Get ayah text in Uthmani script
-export async function getAyahText(surah, ayah) {
-    const ref = `${surah}:${ayah}`;
-    const res = await fetch(`${BASE}/ayah/${ref}/quran-uthmani`);
-    const data = await res.json();
-    return data.data.text;
+/**
+ * 1. УНИВЕРСАЛЬНЫЙ ПОИСК СУРЫ (По номеру или названиям на любых языках)
+ */
+export function findSurahNumberByText(transcript) {
+    if (!transcript) return null;
+
+    // Приводим текст к нижнему регистру и удаляем знаки препинания
+    const text = transcript.toLowerCase().replace(/[-.,!?]/g, ' ').trim();
+
+    // А. Если пользователь назвал номер (например: "сура 36" или просто "67")
+    const matchNum = text.match(/\d+/);
+    if (matchNum) {
+        const num = parseInt(matchNum[0], 10);
+        if (num >= 1 && num <= 114) return num;
+    }
+
+    // Б. Ищем совпадение по нашему словарю surahs.json
+    for (const surah of surahsData) {
+        for (const alias of surah.names) {
+            if (text.includes(alias)) {
+                return surah.id;
+            }
+        }
+    }
+
+    return null;
 }
 
-// Get ayah audio URL for a specific reciter
-export function getAyahAudioUrl(surah, ayah, reciter = 'ar.alafasy') {
-    const ref = `${surah}:${ayah}`;
-    return `${BASE}/ayah/${ref}/${reciter}`;
-}
+/**
+ * 2. НАДЕЖНАЯ ЗАГРУЗКА ЭТАЛОНА через EveryAyah CDN (Мишари Рашид)
+ */
+export async function getAyahData(surahNumber, ayahNumber = 1) {
+    try {
+        // Форматируем номера в 3 цифры (например: 001, 036, 067)
+        const surahPadded = String(surahNumber).padStart(3, '0');
+        const ayahPadded = String(ayahNumber).padStart(3, '0');
 
-// Get full surah text
-export async function getSurahText(surah) {
-    const res = await fetch(`${BASE}/surah/${surah}/quran-uthmani`);
-    const data = await res.json();
-    return data.data.ayahs.map((a) => ({
-        number: a.numberInSurah,
-        text: a.text,
-        audio: a.audio
-    }));
-}
+        // Прямая гарантированная ссылка на чистый аудиофайл с EveryAyah
+        const audioUrl = `https://everyayah.com/data/Alafasy_128kbps/${surahPadded}${ayahPadded}.mp3`;
 
-// Get word-by-word breakdown
-export async function getAyahWords(surah, ayah) {
-    const ref = `${surah}:${ayah}`;
-    const res = await fetch(`${BASE}/ayah/${ref}/editions/quran-word-by-word`);
-    const data = await res.json();
-    return data.data.words || [];
+        return {
+            surahNumber,
+            ayahNumber,
+            audioUrl
+        };
+    } catch (err) {
+        console.error('Ошибка получения эталонного аята:', err);
+        return null;
+    }
 }
-
-// List of available reciters
-export const RECITERS = [
-    { id: 'ar.alafasy', name: 'Mishary Alafasy' },
-    { id: 'ar.abdulbasitmurattal', name: 'Abdul Basit' },
-    { id: 'ar.husary', name: 'Mahmoud Al-Husary' },
-    { id: 'ar.minshawi', name: 'Mohammad Al-Minshawi' },
-    { id: 'ar.abdurrahmaansudais', name: 'Abdurrahman As-Sudais' },
-];

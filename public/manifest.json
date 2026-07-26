@@ -1,22 +1,36 @@
 {
-    "name": "Siraj - Quran Voice Learning",
-    "short_name": "Siraj",
-    "description": "Voice-controlled Quran learning with AI teachers",
-    "start_url": "/",
-    "display": "standalone",
-    "background_color": "#0a0a0a",
-    "theme_color": "#0a0a0a",
-    "orientation": "portrait",
-    "icons": [
-        {
-            "src": "/icons/icon-192.png",
-            "sizes": "192x192",
-            "type": "image/png"
-        },
-        {
-            "src": "/icons/icon-512.png",
-            "sizes": "512x512",
-            "type": "image/png"
-        }
-    ]
+  "id": "/",
+  "name": "Siraj - Учитель Корана",
+  "short_name": "Siraj",
+  "description": "Voice-controlled Quran learning with AI teachers - учи Коран голосом с Аишой и Хасаном",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f9b8a",
+  "theme_color": "#0f9b8a",
+  "categories": ["education", "lifestyle"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/icons/screenshot-mobile.png",
+      "sizes": "1080x1920",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Экран голосового обучения Siraj"
+    }
+  ]
 }

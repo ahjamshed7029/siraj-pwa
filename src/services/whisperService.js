@@ -1,25 +1,33 @@
-// Бесплатный Whisper через Groq - в 10 раз быстрее OpenAI
+// src/services/whisperService.js
+
 export async function transcribeWithGroq(audioBlob) {
-  const formData = new FormData();
-  formData.append('file', audioBlob, 'recording.webm');
-  formData.append('model', 'whisper-large-v3');
-  formData.append('language', 'ar');
-  formData.append('prompt', 'القرآن الكريم، سورة الإخلاص، الفاتحة'); // подсказка для Корана
+  if (!audioBlob) {
+    console.warn('⚠️ WhisperService: Передан пустой audioBlob');
+    return '';
+  }
 
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    const formData = new FormData();
+    // Передаем файл с именем и типом
+    formData.append('file', audioBlob, 'recording.webm');
+    formData.append('model', 'whisper-large-v3');
+
+    const response = await fetch('/api/transcribe', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${import.meta.env.VITE_GROQ_API_KEY}`
-      },
-      body: formData
+      body: formData,
     });
 
-    if (res.status === 429) throw new Error('LIMIT');
-    const data = await res.json();
+    if (!response.ok) {
+      throw new Error(`Ошибка Whisper API: статус ${response.status}`);
+    }
+
+    const data = await response.json();
     return data.text || '';
-  } catch (e) {
-    console.warn('Groq limit, переключаюсь на оффлайн', e);
-    return null; // сигнал переключиться
+  } catch (error) {
+    console.error('Groq Whisper Error:', error);
+    return '';
   }
 }
+
+// Экспорт по умолчанию для защиты от ошибок импорта "default is not exported"
+export default transcribeWithGroq;
