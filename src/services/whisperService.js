@@ -1,5 +1,3 @@
-// src/services/whisperService.js
-
 export async function transcribeWithGroq(audioBlob) {
   if (!audioBlob) {
     console.warn('⚠️ WhisperService: Передан пустой audioBlob');
@@ -8,7 +6,6 @@ export async function transcribeWithGroq(audioBlob) {
 
   try {
     const formData = new FormData();
-    // Передаем файл с именем и типом
     formData.append('file', audioBlob, 'recording.webm');
     formData.append('model', 'whisper-large-v3');
 
@@ -29,5 +26,4 @@ export async function transcribeWithGroq(audioBlob) {
   }
 }
 
-// Экспорт по умолчанию для защиты от ошибок импорта "default is not exported"
 export default transcribeWithGroq;

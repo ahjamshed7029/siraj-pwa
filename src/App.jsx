@@ -1,14 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { speakTeacherComment, stopTTS } from './services/ttsService';
 import { getAyahData, findSurahNumberByText } from './services/quranApi';
-import { startRecording, stopRecording } from './services/audioRecorder';
-// ВМЕСТО: import { transcribeWithGroq } from './services/whisperService';
-import transcribeWithGroq from './services/whisperService';
+import { VoiceRecorder } from './services/voiceService';
+import { transcribeWithGroq } from './services/whisperService';
 import { callGemini } from './services/geminiClient';
+import { speakTeacherComment, stopTTS } from './services/ttsService';
 
 const SURAH_NAMES = {
   1: 'Аль-Фатиха', 2: 'Аль-Бакара', 3: 'Аль-Имран', 4: 'Ан-Ниса',
-  5: 'Аль-Маида', 6: 'Аль-Анам', 7: 'Аль-Ааф', 8: 'Аль-Анфаль',
+  5: 'Аль-Маида', 6: 'Аль-Анам', 7: 'Аль-Араф', 8: 'Аль-Анфаль',
   9: 'Ат-Тауба', 10: 'Юнус', 11: 'Худ', 12: 'Юсуф', 13: 'Ар-Раад',
   14: 'Ибрахим', 15: 'Аль-Хиджр', 16: 'Ан-Нахль', 17: 'Аль-Исра',
   18: 'Аль-Кахф', 19: 'Марьям', 20: 'Та-Ха', 21: 'Аль-Анбия',
@@ -44,7 +43,7 @@ export default function App() {
   const [surahName, setSurahName] = useState('Аль-Фатиха');
 
   const audioPlayerRef = useRef(new Audio());
-  const recognitionRef = useRef(null);
+  const recorderRef = useRef(null);
   const silenceTimerRef = useRef(null);
   const isSpeakingRef = useRef(false);
 
@@ -58,6 +57,14 @@ export default function App() {
   useEffect(() => { currentSurahRef.current = currentSurah; }, [currentSurah]);
   useEffect(() => { surahNameRef.current = surahName; }, [surahName]);
 
+  // Инициализация VoiceRecorder
+  useEffect(() => {
+    recorderRef.current = new VoiceRecorder();
+    return () => {
+      if (recorderRef.current) recorderRef.current.stop();
+    };
+  }, []);
+
   const playAudio = (url) => {
     return new Promise((resolve) => {
       if (!url) return resolve();
@@ -69,148 +76,142 @@ export default function App() {
     });
   };
 
-  const fetchAudioBlob = async (audioUrl) => {
-    if (audioUrl instanceof Blob) return audioUrl;
-    const response = await fetch(audioUrl);
-    const audioBlob = await response.blob();
-    console.log(`🎙️ Audio Blob size: ${audioBlob.size} bytes, type: ${audioBlob.type}`);
-    return audioBlob;
-  };
-
+  // === ЗАПУСК ===
   useEffect(() => {
-    initVoiceAssistant();
+    handleAutoStart();
     return () => {
-      if (recognitionRef.current) recognitionRef.current.stop();
-      stopRecording().catch(() => { });
+      if (recorderRef.current) recorderRef.current.stop();
       stopTTS();
     };
   }, []);
 
-  const initVoiceAssistant = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+  const handleAutoStart = async () => {
+    await new Promise(r => setTimeout(r, 600));
 
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'ru-RU';
+    setAppState('speaking');
+    isSpeakingRef.current = true;
+    await speakTeacherComment(
+      "Ассаляму алейкум! Назовите имя учителя: Аиша или Хасан.",
+      'aisha'
+    );
+    isSpeakingRef.current = false;
 
-    recognition.onresult = async (event) => {
-      if (isSpeakingRef.current) return;
-
-      const lastIndex = event.results.length - 1;
-      const transcript = event.results[lastIndex][0].transcript.trim().toLowerCase();
-
-      if (transcript.length < 3) return;
-
-      const echoWords = ['бисмиллях', 'ассаляму', 'алейкум', 'сунна', 'хадис', 'барак', 'рахим'];
-      if (echoWords.some(word => transcript.includes(word))) return;
-
-      if (appStateRef.current === 'sleeping') {
-        if (transcript.includes('аиша') || transcript.includes('айша')) {
-          await handleWakeUp('aisha');
-        } else if (transcript.includes('хасан')) {
-          await handleWakeUp('hassan');
-        }
-      }
-    };
-
-    recognition.onerror = () => {
-      setTimeout(() => { try { recognition.start(); } catch (e) { } }, 1000);
-    };
-
-    recognition.onend = () => {
-      if (!isSpeakingRef.current && appStateRef.current === 'sleeping') {
-        try { recognition.start(); } catch (e) { }
-      }
-    };
-
-    try { recognition.start(); } catch (e) { }
+    startListeningForTeacher();
   };
 
-  const stopRecognition = () => {
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) { }
+  // === СЛУШАЕМ ИМЯ УЧИТЕЛЯ ===
+  const startListeningForTeacher = async () => {
+    setAppState('ask_surah');
+    await new Promise(r => setTimeout(r, 600));
+    await startRecording();
+
+    clearTimeout(silenceTimerRef.current);
+    silenceTimerRef.current = setTimeout(async () => {
+      const audioBlob = await stopRecording();
+      await processTeacherChoice(audioBlob);
+    }, 5000);
+  };
+
+  const processTeacherChoice = async (audioBlob) => {
+    if (!audioBlob || audioBlob.size < 1000) {
+      await speakTeacherComment("Я вас не услышала. Скажите: Аиша или Хасан.", 'aisha');
+      startListeningForTeacher();
+      return;
     }
-  };
 
-  // 1. Активация голосом
-  const handleWakeUp = async (selectedTeacher) => {
-    if (isSpeakingRef.current) return;
-    stopRecognition();
+    let transcript = await transcribeWithGroq(audioBlob);
+
+    // Явный фолбэк, только если сервер не распознал ничего
+    if (!transcript) {
+      console.warn('⚠️ Groq/Whisper вернул пустой текст, пробуем WebSpeech-фолбэк');
+      transcript = await recorderRef.current.fallbackToWebSpeech();
+    }
+
+    console.log("📝 Имя учителя:", transcript);
+
+    const t = (transcript || '').toLowerCase();
+    let selectedTeacher = 'aisha';
+
+    if (t.includes('хасан') || t.includes('hassan')) {
+      selectedTeacher = 'hassan';
+    }
 
     setTeacher(selectedTeacher);
     teacherRef.current = selectedTeacher;
 
-    setAppState('speaking');
-    isSpeakingRef.current = true;
-    stopTTS();
+    await speakTeacherComment(
+      `Хорошо, я ${selectedTeacher === 'aisha' ? 'Аиша' : 'Хасан'}. Какую суру будем читать?`,
+      selectedTeacher
+    );
 
-    const greeting = "Ассаляму алейкум! Какую суру будем читать?";
-    await speakTeacherComment(greeting, selectedTeacher);
-    await new Promise(r => setTimeout(r, 600));
-    isSpeakingRef.current = false;
-
-    await startSurahSelection();
+    startListeningForSurah();
   };
 
-  // 2. Запись выбора суры
-  const startSurahSelection = async () => {
-    stopRecognition();
+  // === СЛУШАЕМ НАЗВАНИЕ СУРЫ ===
+  const startListeningForSurah = async () => {
     setAppState('ask_surah');
     await new Promise(r => setTimeout(r, 600));
-    await startRecording().catch(() => { });
+    await startRecording();
 
     clearTimeout(silenceTimerRef.current);
     silenceTimerRef.current = setTimeout(async () => {
-      const audioBlob = await stopRecording().catch(() => null);
+      const audioBlob = await stopRecording();
       await processSurahChoice(audioBlob);
     }, 8000);
   };
 
-  // 3. Обработка выбора суры
   const processSurahChoice = async (audioBlob) => {
     if (!audioBlob || audioBlob.size < 1000) {
-      console.warn("⚠️ Аудио слишком короткое или тихое");
       await speakTeacherComment("Я вас не услышала. Назовите суру ещё раз.", teacherRef.current);
-      startSurahSelection();
+      startListeningForSurah();
       return;
     }
 
-    const transcript = await transcribeWithGroq(audioBlob);
+    let transcript = await transcribeWithGroq(audioBlob);
+
+    if (!transcript) {
+      console.warn('⚠️ Groq/Whisper вернул пустой текст, пробуем WebSpeech-фолбэк');
+      transcript = await recorderRef.current.fallbackToWebSpeech();
+    }
+
     console.log("📝 Ищем суру по тексту:", transcript);
 
-    const surahNumber = findSurahNumberByText(transcript);
+    const surahNumber = findSurahNumberByText(transcript || '');
 
     if (surahNumber) {
       console.log(`✅ Найдена сура №${surahNumber}`);
       setCurrentSurah(surahNumber);
+      currentSurahRef.current = surahNumber;
       setSurahName(SURAH_NAMES[surahNumber] || `Сура ${surahNumber}`);
+      surahNameRef.current = SURAH_NAMES[surahNumber] || `Сура ${surahNumber}`;
 
-      await speakTeacherComment(`Отлично! Открываем суру ${SURAH_NAMES[surahNumber] || surahNumber}. Прочитайте первый аят.`, teacherRef.current);
+      await speakTeacherComment(
+        `Отлично! Открываем суру ${SURAH_NAMES[surahNumber]}. Прочитайте первый аят.`,
+        teacherRef.current
+      );
       startStudentSession();
     } else {
       console.warn("❌ Сура не найдена в тексте:", transcript);
-      await speakTeacherComment("Извините, не разобрала название. Повторите, пожалуйста, какую суру вы хотите изучать?", teacherRef.current);
-      startSurahSelection();
+      await speakTeacherComment(
+        "Извините, не разобрала название. Повторите, пожалуйста.",
+        teacherRef.current
+      );
+      startListeningForSurah();
     }
   };
 
-  // 4. Запись чтения аята учеником
+  // === СЕССИЯ ЧТЕНИЯ ===
   const startStudentSession = async () => {
-    stopRecognition();
     setAppState('listening');
     await new Promise(r => setTimeout(r, 600));
-    await startRecording().catch(() => { });
+    await startRecording();
 
     clearTimeout(silenceTimerRef.current);
     silenceTimerRef.current = setTimeout(async () => {
       await processCompletedReading();
-    }, 10000);
+    }, 12000);
   };
 
-  // 5. Обработка чтения
   const processCompletedReading = async () => {
     if (isSpeakingRef.current) return;
 
@@ -220,33 +221,33 @@ export default function App() {
     const selectedTeacher = teacherRef.current;
     const selectedSurahNum = currentSurahRef.current;
     const selectedSurahName = surahNameRef.current;
-    const studentAudioBlob = await stopRecording().catch(() => null);
+    const studentAudioBlob = await stopRecording();
 
     let studentText = "";
-    if (studentAudioBlob) {
+    if (studentAudioBlob && studentAudioBlob.size >= 1000) {
       try {
-        const audioBlob = await fetchAudioBlob(studentAudioBlob);
-        if (audioBlob.size >= 1000) {
-          studentText = await transcribeWithGroq(audioBlob);
-          console.log('📝 Whisper recitation text:', studentText);
-        } else {
-          console.warn('⚠️ Запись чтения пустая (< 1000 bytes).');
-          studentText = 'Ученик не прочитал аят вслух.';
+        studentText = await transcribeWithGroq(studentAudioBlob);
+        if (!studentText) {
+          console.warn('⚠️ Groq/Whisper вернул пустой текст, пробуем WebSpeech-фолбэк');
+          studentText = await recorderRef.current.fallbackToWebSpeech();
         }
+        console.log('📝 Whisper recitation text:', studentText);
       } catch (err) {
         console.error("Whisper Recitation Error:", err);
         studentText = 'Не удалось распознать текст.';
       }
+    } else {
+      studentText = 'Ученик не прочитал аят вслух.';
     }
 
-    // А. Учитель объявляет чтение ученика
+    // А. Объявляем чтение ученика
     setAppState('speaking');
     await speakTeacherComment("Послушайте ваше чтение.", selectedTeacher);
     await new Promise(r => setTimeout(r, 600));
     isSpeakingRef.current = false;
 
     // Б. Воспроизводим запись ученика
-    if (studentAudioBlob) {
+    if (studentAudioBlob && studentAudioBlob.size >= 1000) {
       setAppState('playing');
       const studentUrl = URL.createObjectURL(studentAudioBlob);
       await playAudio(studentUrl);
@@ -254,14 +255,13 @@ export default function App() {
       await new Promise(r => setTimeout(r, 300));
     }
 
-    // В. Учитель объявляет эталонное чтение
+    // В. Эталонное чтение
     setAppState('speaking');
     isSpeakingRef.current = true;
     await speakTeacherComment("А теперь эталонное чтение.", selectedTeacher);
     await new Promise(r => setTimeout(r, 600));
     isSpeakingRef.current = false;
 
-    // Г. Играем эталон из Quran API для ВЫБРАННОЙ суры
     const referenceAyahData = await getAyahData(selectedSurahNum, 1);
     if (referenceAyahData && referenceAyahData.audioUrl) {
       setAppState('playing');
@@ -269,7 +269,7 @@ export default function App() {
       await new Promise(r => setTimeout(r, 300));
     }
 
-    // Д. Gemini — разбор
+    // Г. Gemini — разбор
     setAppState('processing');
     isSpeakingRef.current = true;
 
@@ -284,10 +284,50 @@ export default function App() {
     await new Promise(r => setTimeout(r, 600));
     isSpeakingRef.current = false;
 
+    // Завершение
     setAppState('sleeping');
-    try { if (recognitionRef.current) recognitionRef.current.start(); } catch (e) { }
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Предлагаем продолжить
+    setAppState('speaking');
+    isSpeakingRef.current = true;
+    await speakTeacherComment("Хотите продолжить? Назовите следующую суру.", selectedTeacher);
+    isSpeakingRef.current = false;
+
+    startListeningForSurah();
   };
 
+  // === ЗАПИСЬ ЧЕРЕЗ VoiceRecorder ===
+  const startRecording = async () => {
+    if (!recorderRef.current) recorderRef.current = new VoiceRecorder();
+
+    return new Promise((resolve) => {
+      recorderRef.current.onStart = () => resolve();
+      recorderRef.current.start();
+    });
+  };
+
+  const stopRecording = async () => {
+    return new Promise((resolve) => {
+      if (!recorderRef.current) return resolve(null);
+
+      recorderRef.current.onEnd = () => {
+        // Собираем Blob здесь — единственное место, где это происходит.
+        if (recorderRef.current.audioChunks && recorderRef.current.audioChunks.length > 0) {
+          const mimeType = recorderRef.current.mediaRecorder?.mimeType || 'audio/webm';
+          const blob = new Blob(recorderRef.current.audioChunks, { type: mimeType });
+          recorderRef.current.audioChunks = [];
+          resolve(blob);
+        } else {
+          resolve(null);
+        }
+      };
+
+      recorderRef.current.stop();
+    });
+  };
+
+  // === UI ===
   return (
     <div style={{
       height: '100vh', width: '100vw',
